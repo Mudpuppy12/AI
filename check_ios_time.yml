@@ -1,0 +1,14 @@
+---
+- name: Check time on Cisco IOS switches
+  hosts: ios_switches
+  gather_facts: no
+  
+  tasks:
+    - name: Get current time from Cisco IOS device
+      cisco.ios.ios_command:
+        commands: show clock
+      register: clock_output
+      
+    - name: Display the time from device
+      debug:
+        msg: "Current time on {{ inventory_hostname }}: {{ clock_output.stdout[0] }}"
