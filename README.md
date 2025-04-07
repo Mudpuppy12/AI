@@ -22,3 +22,9 @@ It worked.
 ```
 Write a python script to generate three ai descriptions using claude of dungeon rooms then use eleven.ai python sdk to generate the text so speech files 
 ```
+
+## Azure
+# General TF creation - See main.tf
+```
+ create a terraform script to connect to asure and create a linux virtual machine that is reachable from anywhere on the internet over port 22 ssh   
+ ```
