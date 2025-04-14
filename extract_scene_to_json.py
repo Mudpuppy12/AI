@@ -1,6 +1,6 @@
 import os
 import json
-from bs4 import BeautifulSoup  # Keep standard import
+from bs4 import BeautifulSoup
 import jsonschema
 
 def create_directory(dir_path):
@@ -15,100 +15,138 @@ def clean_text(text):
 
 def extract_scene_info(html_content):
     # Use lxml parser for better handling of potentially malformed HTML
-    soup = BeautifulSoup(html_content, 'lxml')  # CHANGED parser
+    soup = BeautifulSoup(html_content, 'lxml')
 
     # Extract title
-    title = soup.find('h1')
-    title = clean_text(title.text) if title else ""
+    title_tag = soup.find('h1')
+    title = clean_text(title_tag.text) if title_tag else ""
 
     # Extract metadata from log-box
     log_box = soup.find('div', class_='log-box')
     ic_date = ""
     ooc_date = ""
     location = ""
-    summary = ""
+    summary = "" # Initialize as empty
 
     if log_box:
-        # Extract dates and location
-        metadata = log_box.find_all('p')
-        for p in metadata:
-            text = p.get_text()
-            if "IC Date:" in text:
-                ic_date = clean_text(text.replace("IC Date:", ""))
-            elif "OOC Date:" in text:
-                ooc_date = clean_text(text.replace("OOC Date:", ""))
-            elif "Location:" in text:
-                location = clean_text(text.replace("Location:", ""))
+        metadata_paragraphs = log_box.find_all('p', recursive=False) # Find direct children paragraphs
 
-        # Extract summary (first paragraph)
-        summary_p = log_box.find('p')
-        if summary_p:
-            summary = clean_text(summary_p.text)
+        summary_found = False
+        for p in metadata_paragraphs:
+            # Check for nested <p> first
+            nested_p = p.find('p')
+            candidate_text = ""
+            if nested_p:
+                candidate_text = clean_text(nested_p.text)
+            else:
+                # If no nested p, clean the text of the current p
+                candidate_text = clean_text(p.text)
 
-    # Extract characters
+            # Check if this paragraph contains metadata keywords using raw text
+            is_metadata = False
+            raw_text = p.get_text()
+            if "IC Date:" in raw_text:
+                ic_date = clean_text(raw_text.replace("IC Date:", ""))
+                is_metadata = True
+            elif "OOC Date:" in raw_text:
+                ooc_date = clean_text(raw_text.replace("OOC Date:", ""))
+                is_metadata = True
+            elif "Location:" in raw_text:
+                location = clean_text(raw_text.replace("Location:", ""))
+                is_metadata = True
+            # Add checks for other potential metadata lines
+            elif "Related Scenes:" in raw_text or "Plot:" in raw_text or "Scene Number:" in raw_text:
+                 is_metadata = True
+
+            # If it's not metadata, not empty, and we haven't found a summary yet, assign it
+            if not is_metadata and not summary_found and candidate_text:
+                summary = candidate_text
+                summary_found = True
+                # Continue processing other paragraphs to ensure all metadata is captured
+
+    # Extract characters - Ensure this searches the whole document section if needed
     characters = []
-    char_galleries = soup.find_all('div', class_='profile-gallery')
-    for gallery in char_galleries:
-        char_name = gallery.find('div', class_='log-icon-title')
-        if char_name:
-            characters.append(clean_text(char_name.text))
+    # Find the participants box first, then galleries within it
+    participants_box = soup.find('div', class_='log-participants-box')
+    if participants_box:
+        char_galleries = participants_box.find_all('div', class_='profile-gallery')
+        for gallery in char_galleries:
+            char_name_div = gallery.find('div', class_='log-icon-title')
+            if char_name_div:
+                char_name = clean_text(char_name_div.text)
+                if char_name:
+                     characters.append(char_name)
 
-    # Extract full scene content - DIRECT ITERATION with LXML
+    # Extract full scene content - DIRECT ITERATION with LXML and scene-set-pose handling
     full_scene = ""
     scene_content_div = soup.find('div', class_='scene-log')
 
     if scene_content_div:
         content_parts = []
-        # Find all relevant tags within scene-log in document order
-        elements = scene_content_div.find_all(['p', 'div'], recursive=False)  # Find direct children first
-
-        if not elements:
-            # Fallback if direct children approach fails (e.g., due to unexpected nesting)
-            # This gets all p and relevant divs anywhere under scene-log
-            elements = scene_content_div.find_all(['p', 'div'])
+        # Find relevant elements directly under scene-log or within scene-set-pose
+        elements = scene_content_div.find_all(['p', 'div'], recursive=False)
 
         last_element_was_divider = False
         for element in elements:
-            # Check class attribute safely
             element_classes = element.get('class', [])
 
             if element.name == 'p':
-                # Replace <br> tags with newlines for intra-paragraph breaks
                 for br in element.find_all('br'):
                     br.replace_with('\n')
-                text = element.get_text().strip()  # Get text after replacing br
+                text = element.get_text().strip()
                 if text:
                     content_parts.append(text)
                     last_element_was_divider = False
             elif element.name == 'div':
-                if 'pose-divider' in element_classes:
-                    # Add a separator, prevent duplicates
-                    if not last_element_was_divider:
+                is_divider = 'pose-divider' in element_classes
+                # Also check for the malformed divider structure if necessary
+                # (Assuming lxml handles it better, but keeping check minimal)
+
+                if is_divider:
+                    if not last_element_was_divider and content_parts:
                         content_parts.append("---")
                         last_element_was_divider = True
                 elif 'scene-system-pose' in element_classes:
-                    # Replace <br> tags within system pose as well
                     for br in element.find_all('br'):
                         br.replace_with('\n')
                     text = element.get_text().strip()
                     if text:
-                        # Format system text clearly
                         content_parts.append(f"[SYSTEM]\n{text}")
                         last_element_was_divider = False
+                elif 'scene-set-pose' in element_classes:
+                     # Process content within scene-set-pose divs
+                     inner_elements = element.find_all(['p', 'div'], recursive=False)
+                     for inner_element in inner_elements:
+                          if inner_element.name == 'p':
+                               for br in inner_element.find_all('br'):
+                                    br.replace_with('\n')
+                               text = inner_element.get_text().strip()
+                               if text:
+                                    # Avoid adding empty paragraphs from scene-set-pose
+                                    content_parts.append(text)
+                                    last_element_was_divider = False
+                          elif inner_element.name == 'div' and 'scene-system-pose' in inner_element.get('class', []):
+                               for br in inner_element.find_all('br'):
+                                    br.replace_with('\n')
+                               text = inner_element.get_text().strip()
+                               if text:
+                                    content_parts.append(f"[SYSTEM]\n{text}")
+                                    last_element_was_divider = False
+                          # Note: This doesn't handle pose-dividers *inside* scene-set-pose currently
 
-        # Join the parts with double newlines for paragraph separation
-        full_scene = "\n\n".join(content_parts)
+        # Join the parts, ensuring no empty strings are joined
+        full_scene = "\n\n".join(part for part in content_parts if part)
 
         # Final cleanup for consistent spacing around separators
-        full_scene = full_scene.replace("\n\n---", "\n\n---\n\n").replace("---\n\n", "\n\n---\n\n")
-        # Remove potential leading/trailing separators if they exist
-        if full_scene.startswith("---\n\n"):
-            full_scene = full_scene[len("---\n\n"):]
-        if full_scene.endswith("\n\n---"):
-            full_scene = full_scene[:-len("\n\n---")]
-        # Ensure no triple newlines from cleanup
+        full_scene = full_scene.replace("\n---", "\n\n---").replace("---\n", "---\n\n")
         while "\n\n\n" in full_scene:
-            full_scene = full_scene.replace("\n\n\n", "\n\n")
+             full_scene = full_scene.replace("\n\n\n", "\n\n")
+        full_scene = full_scene.strip()
+        if full_scene.startswith("---\n\n"):
+            full_scene = full_scene[len("---\n\n"):].strip()
+        if full_scene.endswith("\n\n---"):
+            full_scene = full_scene[:-len("\n\n---")].strip()
+
 
     scene_data = {
         "scene": {
@@ -117,8 +155,8 @@ def extract_scene_info(html_content):
             "ic_date": ic_date,
             "location": location,
             "characters_involved": characters,
-            "summary": summary,
-            "full_scene": full_scene.strip()  # Add strip() for final cleanup
+            "summary": summary, # Use the potentially empty but correctly processed summary
+            "full_scene": full_scene # Already stripped
         }
     }
 
