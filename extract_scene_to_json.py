@@ -175,7 +175,8 @@ def main():
 
     print(f"Scanning directory: {source_dir}")
     for filename in os.listdir(source_dir):
-        if filename.lower().endswith('.html'):
+        # Check if filename ends with .html AND starts with a digit
+        if filename.lower().endswith('.html') and filename[0].isdigit():
             source_filepath = os.path.join(source_dir, filename)
             base_filename = os.path.splitext(filename)[0]
             target_filepath = os.path.join(target_dir, f"{base_filename}.json")
